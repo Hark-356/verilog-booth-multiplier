@@ -474,3 +474,4 @@ For power-sensitive applications, gate the clock to the datapath registers when 
 | **Why `else` on `ashred`?** | It must be a 1-cycle pulse; without `else`, it stays HIGH and counter runs continuously |
 | **Synthesizable?** | Yes on Vivado/FPGA; portable to ASIC after adding explicit reset |
 | **Resource usage (n=8)?** | ~45–62 FFs, small LUT footprint, well under 1% of Basys-3 Artix-7 capacity |
+
