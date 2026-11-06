@@ -1,178 +1,148 @@
-# Booth Multiplier — Verilog Implementation
+# Booth Multiplier — Verilog RTL Implementation
 
-A fully synthesizable, RTL-level implementation of the **Booth's Multiplication Algorithm** in Verilog, designed and simulated using Xilinx Vivado.
-
----
-
-## 📐 Algorithm Overview
-
-Booth's algorithm is a signed binary multiplication algorithm that handles both positive and negative (two's complement) operands efficiently by reducing the number of partial products through recoding. It inspects two bits at a time (`q0` and `qn1`) to decide whether to add, subtract, or do nothing with the multiplicand.
-
-| `q0` | `qn1` | Operation |
-|------|-------|-----------|
-| 0    | 0     | Shift (no-op) |
-| 1    | 0     | Subtract BR from AC |
-| 0    | 1     | Add BR to AC |
-| 1    | 1     | Shift (no-op) |
+> Parameterized, synthesizable implementation of **Booth's Multiplication Algorithm** using a Moore FSM + Datapath split.
+> Designed and simulated on **Xilinx Vivado 2024.2** targeting the **Basys-3 (Artix-7 XC7A35T)**.
 
 ---
 
-## 🗂️ Project Structure
+## What It Does
+
+Booth's algorithm multiplies two signed n-bit two's-complement numbers to produce a correct signed 2n-bit product — without any special-casing for negative inputs.
+
+It works by inspecting the multiplier's bits in overlapping pairs (`q0`, `qn1`). Runs of identical bits become pure shifts (free). Only transitions between 0→1 and 1→0 trigger an add or subtract. This reduces the number of arithmetic operations compared to naive shift-and-add, and handles signed inputs natively.
+
+**Simulation result:**
+
+| Input | Value |
+|---|---|
+| `multiplicand` | +15 (`01111`) |
+| `multiplier` | −14 (`10010`) |
+| `product` | −210 (`1100101110`) |
+
+![Booth Multiplier Simulation Waveform](sim/waveforms/simulated_waveform.png)
+
+The waveform shows `start` triggering the FSM, `SC` counting down from `n` to 0 across shift cycles, `partial_product` updating after each arithmetic shift, and `done` asserting when `{AC, QR}` holds the final result.
+
+---
+
+## Module Hierarchy
+
+```
+Booth_Multiplier  (top)
+├── Booth_Control_Unit     — 7-state Moore FSM, control signals only
+└── Booth_Datapath         — registers + arithmetic, status signals only
+    ├── n_bit_adder_subtractor  — parameterized n-bit signed adder/subtractor (structural)
+    │   └── full_adder ×n       — gate-level 1-bit full adder (xor/and/or primitives)
+    └── sequence_counter        — parameterized down-counter, tracks iteration depth
+```
+
+The design uses a strict **ASM control-unit + datapath split**:
+- Control unit only emits control signals (`ldAC`, `ashr`, `done`, …) — it never touches data.
+- Datapath only consumes control signals and emits status signals (`q0`, `qn1`, `cntz`) — it never makes algorithmic decisions.
+
+---
+
+## Project Structure
 
 ```
 Booth_Multiplier_Project/
-├── src/                        # RTL source files
-│   ├── Booth_Multiplier.v      # Top-level module
-│   ├── Booth_Datapath.v        # Datapath unit
-│   ├── Booth_Control_Unit.v    # FSM-based control unit
-│   ├── n_bit_adder_subtractor.v# N-bit adder/subtractor
-│   ├── sequence_counter.v      # Down-counter for iteration tracking
-│   └── full_adder.v            # 1-bit full adder (primitive)
+├── src/
+│   ├── Booth_Multiplier.v          ← Top-level, connects datapath ↔ control unit
+│   ├── Booth_Control_Unit.v        ← Moore FSM (7 states)
+│   ├── Booth_Datapath.v            ← AC, BR, QR registers + shift + product
+│   ├── n_bit_adder_subtractor.v    ← Structural n-bit add/subtract
+│   ├── sequence_counter.v          ← Iteration down-counter
+│   └── full_adder.v                ← Gate-level 1-bit full adder
 ├── sim/
 │   ├── testbench/
-│   │   └── Booth_Multiplier_tb.v  # Simulation testbench
-│   └── waveforms/              # Simulation waveform screenshots
-├── docs/                       # Reports and documentation
+│   │   └── Booth_Multiplier_tb.v   ← Cycle-by-cycle trace testbench
+│   └── waveforms/
+│       └── simulated_waveform.png  ← Vivado simulation screenshot
+├── docs/
+│   └── PROJECT_REPORT.md           ← Full in-depth design analysis
+├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 🔩 Module Hierarchy
+## FSM State Table
 
-```
-Booth_Multiplier  (top)
-├── Booth_Datapath
-│   ├── n_bit_adder_subtractor
-│   │   └── full_adder  (×n instances)
-│   └── sequence_counter
-└── Booth_Control_Unit
-```
+| State | Action | Signals Asserted |
+|---|---|---|
+| S0 | IDLE — wait for `start` | (none) |
+| S1 | Load operands | `ldBR`, `ldQR` |
+| S2 | Initialise | `clrAC`, `clrff`, `ldCNT` |
+| S3 | Add: `AC ← AC + BR` | `addsub_inst=1`, `cin=0`, `ldAC` |
+| S4 | Subtract: `AC ← AC − BR` | `addsub_inst=1`, `cin=1`, `ldAC` |
+| S5 | Arithmetic shift right + decrement counter | `ashr`, `decr` |
+| S6 | DONE | `done` |
 
----
+**Booth decision table** (determines S3/S4/S5 from S2 or S5):
 
-## 📦 Module Descriptions
-
-### `Booth_Multiplier` (Top)
-**File:** `src/Booth_Multiplier.v`
-
-Parameterized top-level wrapper. Instantiates the datapath and control unit and connects them via internal control/status signals.
-
-| Port | Direction | Width | Description |
-|------|-----------|-------|-------------|
-| `clk` | Input | 1 | Clock signal |
-| `start` | Input | 1 | Initiates multiplication |
-| `multiplicand` | Input | n | Signed multiplicand (BR) |
-| `multiplier` | Input | n | Signed multiplier (QR) |
-| `product` | Output | 2n | Final signed product |
-| `partial_product` | Output | n | Last partial product (AC) |
-| `SC` | Output | n | Step counter value |
-| `done` | Output | 1 | High when result is ready |
+| `q0` | `qn1` | Transition |
+|---|---|---|
+| 0 | 0 | → S5 (shift only) |
+| 1 | 1 | → S5 (shift only) |
+| 0 | 1 | → S3 (add) |
+| 1 | 0 | → S4 (subtract) |
 
 ---
 
-### `Booth_Control_Unit`
-**File:** `src/Booth_Control_Unit.v`
+## Running the Simulation
 
-A Moore-type FSM with 7 states implementing the Booth control flow:
+1. Open Vivado → Create Project → Add all files from `src/` as **Design Sources**.
+2. Add `sim/testbench/Booth_Multiplier_tb.v` as a **Simulation Source**.
+3. Set `Booth_Multiplier_tb` as the top simulation module.
+4. **Run Simulation → Run Behavioral Simulation**.
 
-| State | Action |
-|-------|--------|
-| S0 | IDLE — wait for `start` |
-| S1 | Load BR (multiplicand) and QR (multiplier) |
-| S2 | Clear AC, clear qn1 ff, load counter |
-| S3 | Add: `AC ← AC + BR` |
-| S4 | Subtract: `AC ← AC − BR` |
-| S5 | Arithmetic shift right (`{AC, QR, qn1} >> 1`), decrement counter |
-| S6 | DONE — assert `done` |
+The testbench prints a cycle-by-cycle table of `AC`, `QR`, `BR`, `SC`, `qn1`, all control signals, and the final product.
 
----
+### Changing Bit-Width
 
-### `Booth_Datapath`
-**File:** `src/Booth_Datapath.v`
-
-Contains all registers (`AC`, `QR`, `BR`) and their load/clear logic, the ASHR (arithmetic shift right) operation on `{AC, QR, qn1}`, and product assembly.
-
----
-
-### `n_bit_adder_subtractor`
-**File:** `src/n_bit_adder_subtractor.v`
-
-Parameterized n-bit adder/subtractor. When `addsub_inst = 1`, performs subtraction via XOR + carry-in trick. Internally chains `n` instances of `full_adder`.
-
----
-
-### `sequence_counter`
-**File:** `src/sequence_counter.v`
-
-A parameterized down-counter loaded with `n` on `ldCNT`. Decrements on each `decr` pulse. When it reaches 0, `cntz` goes high, signalling the control unit to terminate.
-
----
-
-### `full_adder`
-**File:** `src/full_adder.v`
-
-Gate-level 1-bit full adder using `xor`, `and`, and `or` primitives.
-
----
-
-## 🧪 Testbench
-
-**File:** `sim/testbench/Booth_Multiplier_tb.v`
-
-Tests the multiplier with the sample case:
-- **Multiplicand** = 15 (positive)
-- **Multiplier** = −14 (negative)
-- **Expected product** = −210
-
-The testbench prints a cycle-by-cycle trace of `AC`, `QR`, `BR`, `SC`, `qn1`, all control signals, and the final product at every positive clock edge.
-
----
-
-## 🖥️ Simulation & Synthesis
-
-**Tool:** Xilinx Vivado 2024.2
-
-### Run Behavioral Simulation
-1. Open Vivado and create/import the project.
-2. Add all files from `src/` as **Design Sources**.
-3. Add `sim/testbench/Booth_Multiplier_tb.v` as a **Simulation Source**.
-4. Set `Booth_Multiplier_tb` as the top simulation module.
-5. Click **Run Simulation → Run Behavioral Simulation**.
-
-### Changing the Bit-Width
-The design is fully parameterized. Change the parameter `n` in the testbench to test with different word sizes:
+The design is fully parameterized. In the testbench:
 ```verilog
-parameter n = 8; // 8-bit signed multiplication → 16-bit product
+parameter n = 8;   // change to any bit-width
 ```
 
 ---
 
-## 📊 Simulation Waveforms
+## Known Issues
 
-Waveform screenshots from Vivado's behavioral simulation are shown below.
+| # | Issue | Status |
+|---|---|---|
+| 1 | `initial state = S0` — not ASIC-portable, relies on FPGA power-up init | Open — fix: add explicit synchronous reset |
+| 2 | S6 loops forever — FSM cannot restart without hardware reset | Open — fix: `S6: if (!start) state <= S0` |
+| 3 | Sequence counter wired to `ashred` instead of `decr` — adds 1-cycle delay | Open |
+| 4 | `decr & SC>0` — bitwise `&` instead of logical `&&` | Open |
+| 5 | `product` output is combinational, only valid for 1 cycle while in S6 | Open — fix: register product on done edge |
 
-### Test Case: 15 × (−14) = −210
-
-| Signal | Value |
-|--------|-------|
-| `multiplicand` | `01111` (+15) |
-| `multiplier` | `10010` (−14) |
-| `product` | `1100101110` (−210) |
-
-![Booth Multiplier Simulation Waveform](sim/waveforms/simulated_waveform.png)
-
-The waveform shows:
-- **`start`** goes high to kick off the algorithm.
-- **`SC`** (step counter) counts down from `n` → 0 across shift cycles.
-- **`partial_product`** updates after each arithmetic shift right step.
-- **`done`** asserts high once the counter reaches zero and the final product is latched into `{AC, QR}`.
-- **`product`** holds the correct 2n-bit signed result at completion.
+> See [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md) for the full analysis of each bug, the design reasoning behind every decision, synthesizability notes, resource estimates, and future work.
 
 ---
 
-## 👤 Author
+## Synthesizability
 
-> Digital System Design — Booth Multiplier Project  
-> Implemented in Verilog | Simulated & Synthesized on Xilinx Vivado 2024.2
+**Fully synthesizable on Vivado/Basys-3.** No `#delays`, no `$display`, no `===` in the design sources. Gate-level primitives (`xor`, `and`, `or`, `buf`) are supported — Vivado maps them to LUTs during synthesis.
 
+For ASIC portability, replace `initial` blocks with explicit synchronous resets.
+
+**Resource estimate (n=8):** ~45–62 flip-flops + small LUT footprint. Well under 1% of the Basys-3 Artix-7's 33,280 logic cells.
+
+---
+
+## Future Work
+
+- **Explicit reset** — add active-low synchronous reset for ASIC portability
+- **Registered product output** — capture `{AC, QR}` into a register on the `done` edge so it persists across state transitions
+- **Radix-4 (Modified) Booth** — examine 3-bit windows to halve the number of partial products and roughly double throughput
+- **Faster adder** — replace ripple-carry chain with carry-lookahead or Xilinx DSP48E1 for large `n`
+- **Valid/ready handshake** — replace bare `start`/`done` with an AXI-Stream compatible interface
+- **Self-checking testbench** — exhaustively verify all `2^(2n)` input combinations with automated pass/fail
+
+---
+
+## Author
+
+> **Digital System Design — Booth Multiplier Project**
+> Implemented in Verilog | Simulated & synthesized on Xilinx Vivado 2024.2
