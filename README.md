@@ -150,7 +150,24 @@ parameter n = 8; // 8-bit signed multiplication → 16-bit product
 
 ## 📊 Simulation Waveforms
 
-Waveform screenshots from Vivado's simulation are available in `sim/waveforms/`.
+Waveform screenshots from Vivado's behavioral simulation are shown below.
+
+### Test Case: 15 × (−14) = −210
+
+| Signal | Value |
+|--------|-------|
+| `multiplicand` | `01111` (+15) |
+| `multiplier` | `10010` (−14) |
+| `product` | `1100101110` (−210) |
+
+![Booth Multiplier Simulation Waveform](sim/waveforms/simulated_waveform.png)
+
+The waveform shows:
+- **`start`** goes high to kick off the algorithm.
+- **`SC`** (step counter) counts down from `n` → 0 across shift cycles.
+- **`partial_product`** updates after each arithmetic shift right step.
+- **`done`** asserts high once the counter reaches zero and the final product is latched into `{AC, QR}`.
+- **`product`** holds the correct 2n-bit signed result at completion.
 
 ---
 
@@ -158,3 +175,4 @@ Waveform screenshots from Vivado's simulation are available in `sim/waveforms/`.
 
 > Digital System Design — Booth Multiplier Project  
 > Implemented in Verilog | Simulated & Synthesized on Xilinx Vivado 2024.2
+
