@@ -1,0 +1,28 @@
+# Vivado project generated files
+*.cache/
+*.runs/
+*.sim/
+*.ip_user_files/
+*.hw/
+*.xpr
+*.jou
+*.log
+*.str
+*.dcp
+*.rpt
+*.pb
+*.bit
+*.ltx
+
+# Vivado backup files
+*.bak
+
+# Simulation compiled output
+*.sdb
+*.rlx
+xsim.dir/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
